@@ -802,6 +802,18 @@ tr.total td b{color:var(--gelo)}
 }
 .engrenagem:hover{border-color:var(--azul-vivo);color:var(--azul-vivo)}
 
+
+
+/* Otimização de envio — status por documento */
+.doc-status-envio{display:inline-flex;align-items:center;gap:.35rem;margin-top:.35rem;padding:.22rem .55rem;border-radius:999px;font-size:.72rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;width:max-content;border:1px solid rgba(148,163,184,.22);color:#9fb0ca;background:rgba(15,23,42,.55)}
+.doc-status-envio.enviando,.doc-status-envio.otimizando{color:#7db7ff;border-color:rgba(59,130,246,.45);background:rgba(37,99,235,.10)}
+.doc-status-envio.enviado{color:#40d6ad;border-color:rgba(52,211,153,.4);background:rgba(16,185,129,.10)}
+.doc-status-envio.erro{color:#ff8585;border-color:rgba(248,113,113,.4);background:rgba(239,68,68,.10)}
+.doc-status-envio .mini-spin{width:.72rem;height:.72rem;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:girar .7s linear infinite}
+.doc-economia{display:block;margin-top:.18rem;color:#64d7b0;font-size:.72rem;font-weight:700}
+.envio-andamento{margin:0 0 1rem;padding:.9rem 1rem;border:1px solid rgba(59,130,246,.28);background:rgba(37,99,235,.08);border-radius:14px;display:flex;align-items:flex-start;gap:.75rem}
+.envio-andamento .envio-icone{flex:0 0 auto;width:2rem;height:2rem;border-radius:50%;display:grid;place-items:center;background:rgba(59,130,246,.14);color:#7db7ff}
+.envio-andamento b{display:block;color:#e8eef8;margin-bottom:.15rem}.envio-andamento span{display:block;color:#9fb0ca;font-size:.84rem;line-height:1.35}
 </style>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="kohl-modern.css">
@@ -937,28 +949,29 @@ const MAX_MB = 10;
    funcionar, ele mostra o config.js pronto para colar — aí passa a
    valer para o motorista também, e não só para quem configurou.
    ===================================================================== */
-const CFG = { url: '' };
+const CFG = { url: '', chave: '' };
 
 function lerConfig() {
   try {
     const salvo = localStorage.getItem('kohl.config');
-    if (salvo) {
-      const cfg = JSON.parse(salvo);
-      if (cfg && cfg.url) CFG.url = cfg.url;
-    }
-  } catch (e) {}
-  if (typeof KOHL_CONFIG === 'object' && KOHL_CONFIG && KOHL_CONFIG.API_URL) {
-    CFG.url = KOHL_CONFIG.API_URL;
+    if (salvo) Object.assign(CFG, JSON.parse(salvo));
+  } catch (e) {
+    // Navegador sem armazenamento, ou página aberta de um jeito que o
+    // bloqueia. Não é problema: segue com o config.js.
+  }
+  // O config.js manda: é ele que vale para quem abre o link.
+  if (typeof KOHL_CONFIG === 'object' && KOHL_CONFIG) {
+    if (KOHL_CONFIG.API_URL) CFG.url = KOHL_CONFIG.API_URL;
   }
 }
 
-function salvarConfig(url) {
-  CFG.url = String(url || '').trim();
+function salvarConfig(url, chave) {
+  CFG.url = url; CFG.chave = chave;
   try {
-    localStorage.setItem('kohl.config', JSON.stringify({ url: CFG.url }));
+    localStorage.setItem('kohl.config', JSON.stringify({ url: url, chave: chave }));
     return true;
   } catch (e) {
-    return false;
+    return false;   // vale só enquanto a página estiver aberta
   }
 }
 
@@ -980,7 +993,10 @@ async function chamar(acao, dados) {
       // text/plain de propósito: evita o preflight CORS, que o Apps
       // Script não responde. O servidor lê o corpo como JSON do mesmo jeito.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ acao: acao }, dados || {}))
+      body: JSON.stringify(Object.assign(
+        { acao: acao },
+        CFG.chave ? { chave: CFG.chave } : {},
+        dados || {}))
     });
   } catch (e) {
     throw new Error('o servidor não respondeu. Confira se a implantação está com ' +
@@ -1024,6 +1040,69 @@ function lerArquivo(file) {
     r.onerror = () => erro(new Error('não consegui ler ' + file.name));
     r.readAsDataURL(file);
   });
+}
+
+
+/* Fotos de celular costumam ser muito maiores do que o necessário para
+   conferência documental. Reduzimos apenas JPEG/PNG/WebP grandes; PDF não
+   é alterado. Se o navegador não conseguir comprimir, o arquivo original
+   continua sendo usado (desde que esteja dentro do limite do servidor). */
+const FOTO_LIMITE_ORIGINAL_MB = 20;
+const FOTO_COMPRIMIR_ACIMA_MB = 1.2;
+const FOTO_LADO_MAX = 1800;
+const FOTO_QUALIDADE = 0.82;
+
+function tamanhoHumano(bytes) {
+  bytes = Number(bytes || 0);
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + ' MB';
+  return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
+function carregarImagem(file) {
+  return new Promise((ok, erro) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); ok(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); erro(new Error('não consegui preparar esta foto')); };
+    img.src = url;
+  });
+}
+
+function canvasParaBlob(canvas, tipo, qualidade) {
+  return new Promise((ok, erro) => {
+    canvas.toBlob(blob => blob ? ok(blob) : erro(new Error('não consegui otimizar a foto')), tipo, qualidade);
+  });
+}
+
+async function otimizarFoto(file) {
+  const tipo = String(file.type || '').toLowerCase();
+  const compativel = /^image\/(jpeg|png|webp)$/.test(tipo);
+  if (!compativel || file.size <= FOTO_COMPRIMIR_ACIMA_MB * 1024 * 1024) {
+    return { file: file, nome: file.name, mime: file.type || 'image/jpeg', originalBytes: file.size, otimizado: false };
+  }
+
+  const img = await carregarImagem(file);
+  const maior = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+  const escala = maior > FOTO_LADO_MAX ? FOTO_LADO_MAX / maior : 1;
+  const w = Math.max(1, Math.round((img.naturalWidth || img.width) * escala));
+  const h = Math.max(1, Math.round((img.naturalHeight || img.height) * escala));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  const blob = await canvasParaBlob(canvas, 'image/jpeg', FOTO_QUALIDADE);
+
+  // Se praticamente não economizou, preserva o original.
+  if (blob.size >= file.size * 0.92) {
+    return { file: file, nome: file.name, mime: file.type || 'image/jpeg', originalBytes: file.size, otimizado: false };
+  }
+
+  const nome = String(file.name || 'documento').replace(/\.[^.]+$/, '') + '.jpg';
+  let novo;
+  try { novo = new File([blob], nome, { type: 'image/jpeg', lastModified: Date.now() }); }
+  catch (e) { novo = blob; }
+  return { file: novo, nome: nome, mime: 'image/jpeg', originalBytes: file.size, otimizado: true };
 }
 
 /* Quando não dá para copiar sozinho, seleciona o texto para a pessoa
@@ -1455,6 +1534,7 @@ const S = {
   banco: '', agencia: '', conta: '', tipoConta: 'corrente',
   pixTipo: 'cpf', pix: '',
   arquivos: {},          // chave do documento -> { nome, tamanho, file }
+  uploadStatus: {},      // chave -> pronto | otimizando | enviando | enviado | erro
   erros: {}, enviando: false,
   enviado: null,         // protocolo, depois do envio
   modal: null
@@ -1555,6 +1635,11 @@ function telaFormulario() {
       ? '<div class="aviso aviso-erro"><strong>Não deu para enviar.</strong> ' + esc(S.falhou) +
         ' Os dados continuam preenchidos — tente de novo em instantes.</div>'
       : '') +
+    (S.enviando
+      ? '<div class="envio-andamento"><span class="envio-icone"><span class="mini-spin"></span></span><div>' +
+        '<b>' + esc(S.enviando.texto) + '</b><span>Etapa ' + S.enviando.feito + ' de ' + S.enviando.total +
+        '. Não feche esta página até aparecer o protocolo.</span></div></div>'
+      : '') +
     '<p class="fraco pub-intro">Preencha os dados do motorista e envie os cinco documentos. ' +
     'Leva uns três minutos e pode ser feito pelo celular.</p>' +
 
@@ -1630,14 +1715,25 @@ function telaFormulario() {
     'fotografar na hora.</p>' +
     '<div class="docs">' + DOCS.map(d => {
       const a = S.arquivos[d.chave];
+      const st = S.uploadStatus[d.chave] || '';
+      const statusTxt = st === 'otimizando' ? 'Otimizando foto' : st === 'enviando' ? 'Enviando' :
+        st === 'enviado' ? 'Enviado' : st === 'erro' ? 'Falha no envio' : (a ? 'Pronto' : '');
+      const statusHtml = statusTxt
+        ? '<span class="doc-status-envio ' + st + '">' +
+          ((st === 'otimizando' || st === 'enviando') ? '<span class="mini-spin"></span>' : '') +
+          esc(statusTxt) + '</span>'
+        : '';
+      const economia = a && a.otimizado
+        ? '<span class="doc-economia">Foto reduzida de ' + esc(tamanhoHumano(a.originalBytes)) + ' para ' + esc(a.tamanho) + '</span>'
+        : '';
       return '<label class="doc' + (a ? ' cheio' : '') + '" for="f-' + d.chave + '">' +
         '<span class="doc-icone">' + (a ? '✓' : '+') + '</span>' +
         '<span class="doc-texto"><b>' + esc(d.nome) + '</b>' +
-        '<span>' + (a ? esc(a.nome) + ' · ' + a.tamanho : esc(d.ajuda)) + '</span></span>' +
-        (a ? '<button class="doc-tirar" data-acao="tirarArquivo" data-chave="' + d.chave +
+        '<span>' + (a ? esc(a.nome) + ' · ' + a.tamanho : esc(d.ajuda)) + '</span>' + economia + statusHtml + '</span>' +
+        (a && !S.enviando ? '<button class="doc-tirar" data-acao="tirarArquivo" data-chave="' + d.chave +
           '" aria-label="Remover">&times;</button>' : '') +
         '<input type="file" id="f-' + d.chave + '" data-doc="' + d.chave + '" ' +
-        'accept="application/pdf,image/*" hidden></label>';
+        'accept="application/pdf,image/*" hidden' + (S.enviando ? ' disabled' : '') + '></label>';
     }).join('') + '</div>' +
     (falta.length === 0
       ? '<div class="cadastro-status cadastro-status-ok"><span class="cadastro-status-icone">✓</span>' +
@@ -1667,13 +1763,13 @@ function telaFormulario() {
 
 /* ---------------------------------------------------------- ações -- */
 const ACOES = {
-  tirarArquivo: d => { delete S.arquivos[d.chave]; desenhar(); },
+  tirarArquivo: d => { delete S.arquivos[d.chave]; delete S.uploadStatus[d.chave]; desenhar(); },
   novoCadastro: () => {
     // O cliente e os dados bancários ficam: quem cadastra vários motoristas
     // do mesmo cliente não precisa digitar tudo de novo.
     S.enviado = null; S.nome = ''; S.contato = ''; S.email = '';
     S.placaCavalo = ''; S.placaCarreta = ''; S.validadeCnh = ''; S.rntrc = ''; S.validadeRntrc = '';
-    S.arquivos = {}; S.erros = {};
+    S.arquivos = {}; S.uploadStatus = {}; S.erros = {};
     desenhar(); window.scrollTo(0, 0);
   },
   enviar: async () => {
@@ -1709,6 +1805,8 @@ const ACOES = {
     // Um arquivo por pedido. Os cinco juntos passariam de 40 MB em base64
     // numa chamada só — o Apps Script não aceita, e no 4G da estrada não
     // sobe. Assim o progresso aparece e uma falha não perde o que subiu.
+    S.uploadStatus = {};
+    DOCS.forEach(d => { if (S.arquivos[d.chave]) S.uploadStatus[d.chave] = 'pronto'; });
     S.enviando = { feito: 0, total: DOCS.length + 2, texto: 'Abrindo o cadastro…' };
     desenhar();
     try {
@@ -1720,16 +1818,27 @@ const ACOES = {
         pix_tipo: S.pixTipo, pix: S.pix
       });
 
+      let docAtual = '';
       for (let i = 0; i < DOCS.length; i++) {
         const d = DOCS[i], a = S.arquivos[d.chave];
+        docAtual = d.chave;
+        S.uploadStatus[d.chave] = 'enviando';
         S.enviando = { feito: i + 1, total: DOCS.length + 2,
           texto: 'Enviando ' + d.nome };
         desenhar();
-        await chamar('enviarDocumento', {
-          motorista: criado.id, protocolo: criado.protocolo, tipo: d.chave,
-          nome_arquivo: a.nome, mime: a.mime, tamanho: a.bytes,
-          base64: await lerArquivo(a.file)
-        });
+        try {
+          await chamar('enviarDocumento', {
+            motorista: criado.id, protocolo: criado.protocolo, tipo: d.chave,
+            nome_arquivo: a.nome, mime: a.mime, tamanho: a.bytes,
+            base64: await lerArquivo(a.file)
+          });
+          S.uploadStatus[d.chave] = 'enviado';
+          desenhar();
+        } catch (erroDoc) {
+          S.uploadStatus[d.chave] = 'erro';
+          desenhar();
+          throw erroDoc;
+        }
       }
 
       S.enviando = { feito: DOCS.length + 1, total: DOCS.length + 2,
@@ -1766,22 +1875,44 @@ raiz.addEventListener('input', ev => {
   atualizarBarra();
 });
 
-raiz.addEventListener('change', ev => {
+raiz.addEventListener('change', async ev => {
   const el = ev.target;
   if (el.dataset.guarda === 'pixTipo') { S.pixTipo = el.value; S.pix = ''; desenhar(); return; }
   if (el.dataset.guarda === 'tipoConta') { S.tipoConta = el.value; return; }
   if (!el.dataset.doc) return;
   const f = el.files && el.files[0];
   if (!f) return;
-  if (f.size > MAX_MB * 1024 * 1024) {
-    toast('Arquivo muito grande. O limite é ' + MAX_MB + ' MB.', 'erro'); return;
+  const chave = el.dataset.doc;
+  const ehImagem = /^image\//i.test(f.type || '');
+
+  if (!ehImagem && f.size > MAX_MB * 1024 * 1024) {
+    toast('PDF muito grande. O limite é ' + MAX_MB + ' MB.', 'erro'); return;
   }
-  S.arquivos[el.dataset.doc] = {
-    nome: f.name, mime: f.type || 'application/pdf', bytes: f.size, file: f,
-    tamanho: f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB'
-      : Math.max(1, Math.round(f.size / 1024)) + ' KB'
-  };
-  desenhar();
+  if (ehImagem && f.size > FOTO_LIMITE_ORIGINAL_MB * 1024 * 1024) {
+    toast('Foto muito grande. Escolha uma imagem de até ' + FOTO_LIMITE_ORIGINAL_MB + ' MB.', 'erro'); return;
+  }
+
+  try {
+    let preparado = { file: f, nome: f.name, mime: f.type || 'application/pdf', originalBytes: f.size, otimizado: false };
+    if (ehImagem && f.size > FOTO_COMPRIMIR_ACIMA_MB * 1024 * 1024) {
+      S.uploadStatus[chave] = 'otimizando'; desenhar();
+      preparado = await otimizarFoto(f);
+    }
+    if (preparado.file.size > MAX_MB * 1024 * 1024) {
+      throw new Error('Mesmo após otimizar, o arquivo ficou acima de ' + MAX_MB + ' MB.');
+    }
+    S.arquivos[chave] = {
+      nome: preparado.nome, mime: preparado.mime, bytes: preparado.file.size, file: preparado.file,
+      tamanho: tamanhoHumano(preparado.file.size), originalBytes: preparado.originalBytes, otimizado: preparado.otimizado
+    };
+    S.uploadStatus[chave] = 'pronto';
+    desenhar();
+    if (preparado.otimizado) toast('Foto otimizada para enviar mais rápido.', 'ok');
+  } catch (e) {
+    delete S.uploadStatus[chave];
+    toast('Não conseguimos preparar este arquivo: ' + e.message, 'erro');
+    desenhar();
+  }
 });
 
 function atualizarBarra() {
