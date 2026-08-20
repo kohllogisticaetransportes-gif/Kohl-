@@ -368,14 +368,21 @@ td.n{font-family:var(--dado);font-variant-numeric:tabular-nums;color:var(--gelo)
 }
 .modal{
   background:var(--casco);border:1px solid var(--linha-viva);border-radius:var(--r-lg);
-  box-shadow:var(--sombra-alta);width:min(640px,100%);max-height:88vh;overflow:auto;
+  box-shadow:var(--sombra-alta);width:min(800px,100%);
+  max-height:calc(100dvh - 2rem);display:flex;flex-direction:column;overflow:hidden;
 }
 .modal-cabeca{display:flex;align-items:center;gap:.7rem;padding:1.05rem 1.3rem;
-  border-bottom:1px solid var(--linha)}
+  border-bottom:1px solid var(--linha);flex:0 0 auto}
 .modal-cabeca h3{flex:1 1 auto}
-.modal-corpo{padding:1.3rem}
+.modal-corpo{
+  padding:1.3rem;overflow-y:auto;overflow-x:hidden;min-height:0;flex:1 1 auto;
+  overscroll-behavior:contain;scrollbar-gutter:stable;
+}
+.modal-corpo::-webkit-scrollbar{width:10px}
+.modal-corpo::-webkit-scrollbar-thumb{background:var(--linha-viva);border-radius:999px;border:2px solid var(--casco)}
+.modal-corpo::-webkit-scrollbar-track{background:transparent}
 .modal-pe{padding:1rem 1.3rem;border-top:1px solid var(--linha);display:flex;gap:.6rem;
-  justify-content:flex-end;flex-wrap:wrap}
+  justify-content:flex-end;flex-wrap:wrap;flex:0 0 auto;background:var(--casco)}
 .fechar{appearance:none;border:0;background:none;font-size:1.4rem;line-height:1;cursor:pointer;
   color:var(--prata-fraca);padding:.1rem .45rem;border-radius:var(--r)}
 .fechar:hover{background:var(--vidro);color:var(--gelo)}
@@ -385,6 +392,9 @@ td.n{font-family:var(--dado);font-variant-numeric:tabular-nums;color:var(--gelo)
 /* ------------------------------------------------------ responsivo -- */
 @media (max-width:1000px){
   :root{--rail:0px}
+  .modal-fundo{align-items:flex-start;padding:.5rem}
+  .modal{max-height:calc(100dvh - 1rem);width:100%}
+  .modal-corpo{padding:1rem}
   .casca{grid-template-columns:1fr}
   .rail{
     position:sticky;top:0;height:auto;flex-direction:row;align-items:center;
@@ -791,6 +801,16 @@ tr.total td b{color:var(--gelo)}
 }
 .engrenagem:hover{border-color:var(--azul-vivo);color:var(--azul-vivo)}
 
+
+/* Ajustes da ficha de documentos */
+.modal .registro{overflow:visible}
+.modal .registro-acoes{align-self:center}
+@media (max-width:700px){
+  .modal .registro{grid-template-columns:1fr}
+  .modal .registro-acoes{width:100%;justify-content:flex-start;padding-top:.25rem}
+  .modal .registro-acoes .btn{flex:1 1 auto}
+}
+
 </style>
 </head>
 <body>
@@ -812,7 +832,17 @@ const so = s => String(s || '').replace(/\D/g, '');
 const HOJE = new Date(); HOJE.setHours(0, 0, 0, 0);
 const emDias = n => { const d = new Date(HOJE); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const diasAte = iso => iso ? Math.round((new Date(iso + 'T00:00:00') - HOJE) / 86400000) : null;
-const dataBr = iso => { if (!iso) return '—'; const [a, m, d] = iso.split('-'); return d + '/' + m + '/' + a; };
+const dataBr = valor => {
+  if (!valor) return '—';
+  const s = String(valor).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[3] + '/' + iso[2] + '/' + iso[1];
+  const dt = new Date(s);
+  if (!Number.isNaN(dt.getTime())) {
+    return dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  }
+  return s;
+};
 const moeda = v => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const pct = v => (v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
 const id = () => 'x' + Math.random().toString(36).slice(2, 9);
@@ -1960,11 +1990,11 @@ function ficha(m) {
           : a.status === 'reprovado' ? 'Reprovado' : 'Aguardando', t) : marca('Falta', 'erro')) +
         '</div><div class="registro-meta">' +
         (a ? '<span class="mono">' +
-          (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--farol);text-decoration:underline;text-underline-offset:3px">' + esc(a.arquivo) + '</a>' : esc(a.arquivo)) +
+          (a.url ? '<button type="button" data-acao="visualizarDoc" data-id="' + m.id + '" data-chave="' + d.chave + '" style="appearance:none;border:0;background:none;padding:0;color:var(--farol);font:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer;text-align:left">' + esc(a.arquivo) + '</button>' : esc(a.arquivo)) +
           '</span><span>' + dataBr(a.enviadoEm) + '</span>'
           : '<span>Não enviado</span>') + '</div></div>' +
         '<div class="registro-acoes">' +
-          (a && a.url ? '<a class="btn btn-linha btn-mini" href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer">Visualizar</a>' : '') +
+          (a && a.url ? '<button type="button" class="btn btn-linha btn-mini" data-acao="visualizarDoc" data-id="' + m.id + '" data-chave="' + d.chave + '">Visualizar</button>' : '') +
           (a && a.status !== 'aprovado'
           ? '<button class="btn btn-ok btn-mini" data-acao="aprovarDoc" data-id="' + m.id +
             '" data-chave="' + d.chave + '">Aprovar</button>' +
@@ -1986,6 +2016,18 @@ const ACOES = {
   filtroNota: d => { S.fNota.status = S.fNota.status === d.valor ? '' : d.valor; desenhar(); },
   limparBusca: () => { S.filtro.q = ''; desenhar(); },
   limparBuscaNf: () => { S.fNota.q = ''; desenhar(); },
+  visualizarDoc: d => {
+    const m = motorista(d.id);
+    const doc = m && m.docs ? m.docs[d.chave] : null;
+    const url = doc && doc.url ? String(doc.url).trim() : '';
+    if (!url) { toast('O link deste documento não veio do servidor.', 'erro'); return; }
+    const nova = window.open(url, '_blank');
+    if (nova) {
+      try { nova.opener = null; } catch (e) {}
+    } else {
+      toast('O navegador bloqueou a nova aba. Permita pop-ups para este site e tente novamente.', 'erro');
+    }
+  },
   abrirFicha: d => {
     const m = motorista(d.id);
     abrirModal('Ficha — ' + m.nome, ficha(m),
