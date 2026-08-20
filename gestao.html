@@ -1959,9 +1959,13 @@ function ficha(m) {
         (a ? marca(a.status === 'aprovado' ? 'Aprovado'
           : a.status === 'reprovado' ? 'Reprovado' : 'Aguardando', t) : marca('Falta', 'erro')) +
         '</div><div class="registro-meta">' +
-        (a ? '<span class="mono">' + esc(a.arquivo) + '</span><span>' + dataBr(a.enviadoEm) + '</span>'
+        (a ? '<span class="mono">' +
+          (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--farol);text-decoration:underline;text-underline-offset:3px">' + esc(a.arquivo) + '</a>' : esc(a.arquivo)) +
+          '</span><span>' + dataBr(a.enviadoEm) + '</span>'
           : '<span>Não enviado</span>') + '</div></div>' +
-        '<div class="registro-acoes">' + (a && a.status !== 'aprovado'
+        '<div class="registro-acoes">' +
+          (a && a.url ? '<a class="btn btn-linha btn-mini" href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer">Visualizar</a>' : '') +
+          (a && a.status !== 'aprovado'
           ? '<button class="btn btn-ok btn-mini" data-acao="aprovarDoc" data-id="' + m.id +
             '" data-chave="' + d.chave + '">Aprovar</button>' +
             '<button class="btn btn-erro btn-mini" data-acao="reprovarDoc" data-id="' + m.id +
